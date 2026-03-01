@@ -3,12 +3,13 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Share2, Megaphone, Users, Settings, Menu, X, Bell, LogOut, ChevronRight } from 'lucide-react'
+import { Share2, Megaphone, Users, Settings, Menu, X, Bell, LogOut, ChevronRight, Webhook } from 'lucide-react'
 
 const navItems = [
   { href: '/campaigns', label: 'Campaigns', icon: Megaphone },
   { href: '/referrers', label: 'Referrers', icon: Users },
   { href: '/settings', label: 'Settings', icon: Settings },
+  { href: '/settings/webhooks', label: 'Webhooks', icon: Webhook },
 ]
 
 const BRAND = '#7c3bed'
