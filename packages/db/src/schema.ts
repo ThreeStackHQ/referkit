@@ -1,80 +1,182 @@
-import { pgTable, text, uuid, timestamp, integer, numeric, boolean } from "drizzle-orm/pg-core";
+import {
+  pgTable,
+  pgEnum,
+  text,
+  uuid,
+  timestamp,
+  integer,
+  jsonb,
+} from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
+
+// ── Enums ──────────────────────────────────────────────────────────────────
+
+export const planEnum = pgEnum("plan", ["free", "pro"]);
+export const campaignStatusEnum = pgEnum("campaign_status", [
+  "draft",
+  "active",
+  "paused",
+]);
+export const rewardTypeEnum = pgEnum("reward_type", [
+  "stripe_coupon",
+  "credits",
+  "custom_webhook",
+]);
+export const rewardStatusEnum = pgEnum("reward_status", [
+  "pending",
+  "processing",
+  "sent",
+  "failed",
+]);
+export const jobStatusEnum = pgEnum("job_status", [
+  "pending",
+  "processing",
+  "done",
+  "failed",
+]);
+
+// ── Tables ─────────────────────────────────────────────────────────────────
 
 export const users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
   email: text("email").notNull().unique(),
-  name: text("name"),
   passwordHash: text("password_hash").notNull(),
+  name: text("name"),
+  plan: planEnum("plan").notNull().default("free"),
+  stripeCustomerId: text("stripe_customer_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
-export const programs = pgTable("programs", {
+export const campaigns = pgTable("campaigns", {
   id: uuid("id").primaryKey().defaultRandom(),
-  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  userId: uuid("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
-  slug: text("slug").notNull().unique(),
-  rewardType: text("reward_type").notNull().default("credit"), // credit, coupon, cash
-  rewardValue: numeric("reward_value", { precision: 10, scale: 2 }).notNull().default("0"),
-  rewardCurrency: text("reward_currency").notNull().default("USD"),
-  cookieDays: integer("cookie_days").notNull().default(30),
-  isActive: boolean("is_active").notNull().default(true),
+  status: campaignStatusEnum("status").notNull().default("draft"),
+  rewardType: rewardTypeEnum("reward_type").notNull(),
+  rewardValue: text("reward_value").notNull(),
+  triggerEvent: text("trigger_event"),
+  campaignUrl: text("campaign_url").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
 export const referrers = pgTable("referrers", {
   id: uuid("id").primaryKey().defaultRandom(),
-  programId: uuid("program_id").notNull().references(() => programs.id, { onDelete: "cascade" }),
-  externalUserId: text("external_user_id").notNull(), // from your SaaS
-  email: text("email"),
-  name: text("name"),
-  referralCode: text("referral_code").notNull().unique(), // e.g. "john-abc123"
-  totalReferrals: integer("total_referrals").notNull().default(0),
-  pendingReward: numeric("pending_reward", { precision: 10, scale: 2 }).notNull().default("0"),
-  paidReward: numeric("paid_reward", { precision: 10, scale: 2 }).notNull().default("0"),
+  campaignId: uuid("campaign_id")
+    .notNull()
+    .references(() => campaigns.id, { onDelete: "cascade" }),
+  userEmail: text("user_email").notNull(),
+  refCode: text("ref_code").notNull().unique(),
+  totalClicks: integer("total_clicks").notNull().default(0),
+  totalSignups: integer("total_signups").notNull().default(0),
+  totalConversions: integer("total_conversions").notNull().default(0),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
-export const referrals = pgTable("referrals", {
+export const conversions = pgTable("conversions", {
   id: uuid("id").primaryKey().defaultRandom(),
-  programId: uuid("program_id").notNull().references(() => programs.id, { onDelete: "cascade" }),
-  referrerId: uuid("referrer_id").notNull().references(() => referrers.id, { onDelete: "cascade" }),
-  referredEmail: text("referred_email"),
-  referredUserId: text("referred_user_id"),
-  status: text("status").notNull().default("pending"), // pending, converted, rewarded
-  convertedAt: timestamp("converted_at"),
-  rewardedAt: timestamp("rewarded_at"),
+  campaignId: uuid("campaign_id")
+    .notNull()
+    .references(() => campaigns.id, { onDelete: "cascade" }),
+  referrerId: uuid("referrer_id")
+    .notNull()
+    .references(() => referrers.id, { onDelete: "cascade" }),
+  convertedEmail: text("converted_email").notNull(),
+  rewardStatus: rewardStatusEnum("reward_status").notNull().default("pending"),
+  stripeCouponId: text("stripe_coupon_id"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const rewardJobs = pgTable("reward_jobs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  conversionId: uuid("conversion_id")
+    .notNull()
+    .unique()
+    .references(() => conversions.id, { onDelete: "cascade" }),
+  rewardType: rewardTypeEnum("reward_type").notNull(),
+  payload: jsonb("payload").notNull(),
+  status: jobStatusEnum("status").notNull().default("pending"),
+  attempts: integer("attempts").notNull().default(0),
+  lastError: text("last_error"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
 export const subscriptions = pgTable("subscriptions", {
   id: uuid("id").primaryKey().defaultRandom(),
-  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  tier: text("tier").notNull().default("free"),
-  status: text("status").notNull().default("active"),
-  stripeCustomerId: text("stripe_customer_id"),
-  stripeSubscriptionId: text("stripe_subscription_id"),
-  currentPeriodEnd: timestamp("current_period_end"),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
+  userId: uuid("user_id")
+    .notNull()
+    .unique()
+    .references(() => users.id, { onDelete: "cascade" }),
+  stripeSubscriptionId: text("stripe_subscription_id").notNull(),
+  status: text("status").notNull(),
+  currentPeriodEnd: timestamp("current_period_end").notNull(),
 });
 
-// Relations
-export const programsRelations = relations(programs, ({ one, many }) => ({
-  user: one(users, { fields: [programs.userId], references: [users.id] }),
-  referrers: many(referrers),
-  referrals: many(referrals),
-}));
-export const referrersRelations = relations(referrers, ({ one, many }) => ({
-  program: one(programs, { fields: [referrers.programId], references: [programs.id] }),
-  referrals: many(referrals),
-}));
-export const referralsRelations = relations(referrals, ({ one }) => ({
-  program: one(programs, { fields: [referrals.programId], references: [programs.id] }),
-  referrer: one(referrers, { fields: [referrals.referrerId], references: [referrers.id] }),
+// ── Relations ──────────────────────────────────────────────────────────────
+
+export const usersRelations = relations(users, ({ many, one }) => ({
+  campaigns: many(campaigns),
+  subscription: one(subscriptions, {
+    fields: [users.id],
+    references: [subscriptions.userId],
+  }),
 }));
 
+export const campaignsRelations = relations(campaigns, ({ one, many }) => ({
+  user: one(users, { fields: [campaigns.userId], references: [users.id] }),
+  referrers: many(referrers),
+  conversions: many(conversions),
+}));
+
+export const referrersRelations = relations(referrers, ({ one, many }) => ({
+  campaign: one(campaigns, {
+    fields: [referrers.campaignId],
+    references: [campaigns.id],
+  }),
+  conversions: many(conversions),
+}));
+
+export const conversionsRelations = relations(conversions, ({ one }) => ({
+  campaign: one(campaigns, {
+    fields: [conversions.campaignId],
+    references: [campaigns.id],
+  }),
+  referrer: one(referrers, {
+    fields: [conversions.referrerId],
+    references: [referrers.id],
+  }),
+  rewardJob: one(rewardJobs, {
+    fields: [conversions.id],
+    references: [rewardJobs.conversionId],
+  }),
+}));
+
+export const rewardJobsRelations = relations(rewardJobs, ({ one }) => ({
+  conversion: one(conversions, {
+    fields: [rewardJobs.conversionId],
+    references: [conversions.id],
+  }),
+}));
+
+export const subscriptionsRelations = relations(subscriptions, ({ one }) => ({
+  user: one(users, {
+    fields: [subscriptions.userId],
+    references: [users.id],
+  }),
+}));
+
+// ── Type Exports ───────────────────────────────────────────────────────────
+
 export type User = typeof users.$inferSelect;
-export type Program = typeof programs.$inferSelect;
+export type NewUser = typeof users.$inferInsert;
+export type Campaign = typeof campaigns.$inferSelect;
+export type NewCampaign = typeof campaigns.$inferInsert;
 export type Referrer = typeof referrers.$inferSelect;
-export type Referral = typeof referrals.$inferSelect;
-export type NewReferral = typeof referrals.$inferInsert;
+export type NewReferrer = typeof referrers.$inferInsert;
+export type Conversion = typeof conversions.$inferSelect;
+export type NewConversion = typeof conversions.$inferInsert;
+export type RewardJob = typeof rewardJobs.$inferSelect;
+export type NewRewardJob = typeof rewardJobs.$inferInsert;
+export type Subscription = typeof subscriptions.$inferSelect;
+export type NewSubscription = typeof subscriptions.$inferInsert;
