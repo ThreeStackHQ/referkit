@@ -102,15 +102,23 @@ export const rewardJobs = pgTable("reward_jobs", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const subscriptionTierEnum = pgEnum("subscription_tier", [
+  "free",
+  "starter",
+  "growth",
+]);
+
 export const subscriptions = pgTable("subscriptions", {
   id: uuid("id").primaryKey().defaultRandom(),
   userId: uuid("user_id")
     .notNull()
     .unique()
     .references(() => users.id, { onDelete: "cascade" }),
-  stripeSubscriptionId: text("stripe_subscription_id").notNull(),
-  status: text("status").notNull(),
-  currentPeriodEnd: timestamp("current_period_end").notNull(),
+  tier: subscriptionTierEnum("tier").notNull().default("free"),
+  status: text("status").notNull().default("active"),
+  stripeSubscriptionId: text("stripe_subscription_id"),
+  stripeCustomerId: text("stripe_customer_id"),
+  currentPeriodEnd: timestamp("current_period_end"),
 });
 
 // ── Relations ──────────────────────────────────────────────────────────────
@@ -180,3 +188,4 @@ export type RewardJob = typeof rewardJobs.$inferSelect;
 export type NewRewardJob = typeof rewardJobs.$inferInsert;
 export type Subscription = typeof subscriptions.$inferSelect;
 export type NewSubscription = typeof subscriptions.$inferInsert;
+export type SubscriptionTier = "free" | "starter" | "growth";

@@ -1,14 +1,17 @@
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { auth } from "@/auth";
-import { db, users, subscriptions } from "@referkit/db";
+import { db, subscriptions } from "@referkit/db";
 import { eq } from "@referkit/db";
-import { getStripe } from "@/lib/stripe";
+import { getStripe, PLANS, type PlanKey } from "@/lib/stripe";
 
-const PRO_PRICE_ID = process.env.STRIPE_PRO_PRICE_ID ?? "";
+const CheckoutSchema = z.object({
+  plan: z.enum(["starter", "growth"]),
+});
 
-export async function POST() {
+export async function POST(req: Request) {
   try {
     const session = await auth();
     if (!session?.user?.id) {
@@ -16,44 +19,62 @@ export async function POST() {
     }
 
     const userId = session.user.id;
+
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+    }
+
+    const parsed = CheckoutSchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: "Validation error", issues: parsed.error.issues },
+        { status: 400 }
+      );
+    }
+
+    const { plan } = parsed.data;
+    const planConfig = PLANS[plan as PlanKey];
+
+    if (!planConfig.priceId) {
+      return NextResponse.json(
+        { error: `Price ID for ${plan} plan is not configured` },
+        { status: 500 }
+      );
+    }
+
     const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
     const stripe = getStripe();
 
     // Get or create Stripe customer
-    const [user] = await db
-      .select()
-      .from(users)
-      .where(eq(users.id, userId))
+    const [existingSub] = await db
+      .select({ stripeCustomerId: subscriptions.stripeCustomerId })
+      .from(subscriptions)
+      .where(eq(subscriptions.userId, userId))
       .limit(1);
 
-    if (!user) {
-      return NextResponse.json({ error: "User not found" }, { status: 404 });
-    }
-
-    let customerId = user.stripeCustomerId;
+    let customerId = existingSub?.stripeCustomerId ?? undefined;
 
     if (!customerId) {
+      // Check auth session for email to create customer
+      const email = session.user.email ?? undefined;
       const customer = await stripe.customers.create({
-        email: user.email,
-        name: user.name ?? undefined,
+        email,
         metadata: { userId },
       });
       customerId = customer.id;
-
-      await db
-        .update(users)
-        .set({ stripeCustomerId: customerId })
-        .where(eq(users.id, userId));
     }
 
     const checkoutSession = await stripe.checkout.sessions.create({
       customer: customerId,
       payment_method_types: ["card"],
       mode: "subscription",
-      line_items: [{ price: PRO_PRICE_ID, quantity: 1 }],
-      success_url: `${appUrl}/dashboard?upgraded=1`,
+      line_items: [{ price: planConfig.priceId, quantity: 1 }],
+      success_url: `${appUrl}/dashboard?upgraded=1&plan=${plan}`,
       cancel_url: `${appUrl}/dashboard/billing`,
-      metadata: { userId },
+      metadata: { userId, plan },
     });
 
     return NextResponse.json({ url: checkoutSession.url });

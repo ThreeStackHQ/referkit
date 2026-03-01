@@ -1,7 +1,7 @@
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
-import { db, rewardJobs, conversions, campaigns, users, referrers } from "@referkit/db";
+import { db, rewardJobs, conversions, campaigns, referrers } from "@referkit/db";
 import { eq, and, lt, inArray } from "@referkit/db";
 import { getStripe } from "@/lib/stripe";
 
@@ -44,24 +44,21 @@ async function processStripeCoupon(
     max_redemptions: 1,
   });
 
-  // Look up user by referrer email to get stripe_customer_id
-  const [user] = await db
-    .select({ stripeCustomerId: users.stripeCustomerId })
-    .from(users)
-    .where(eq(users.email, payload.referrerEmail))
-    .limit(1);
+  // In Stripe v20, coupon field was removed from CustomerUpdateParams.
+  // Create a promotion code for the referrer to redeem instead.
+  const promoCode = await stripe.promotionCodes.create({
+    promotion: { type: "coupon", coupon: coupon.id },
+    max_redemptions: 1,
+    metadata: {
+      referrer_email: payload.referrerEmail,
+      conversion_id: payload.conversionId,
+    },
+  });
 
-  if (user?.stripeCustomerId) {
-    // Apply coupon to customer
-    await stripe.customers.update(user.stripeCustomerId, {
-      coupon: coupon.id,
-    });
-  }
-
-  // Store coupon id on conversion
+  // Store coupon id on conversion (use promo code id as reference)
   await db
     .update(conversions)
-    .set({ stripeCouponId: coupon.id })
+    .set({ stripeCouponId: promoCode.id })
     .where(eq(conversions.id, payload.conversionId));
 }
 

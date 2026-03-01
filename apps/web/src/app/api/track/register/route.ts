@@ -5,6 +5,7 @@ import { z } from "zod";
 import { db, campaigns, referrers } from "@referkit/db";
 import { eq, and } from "@referkit/db";
 import { nanoid } from "nanoid";
+import { canAddReferrer } from "@/lib/tier";
 
 const registerSchema = z.object({
   campaign_id: z.string().uuid(),
@@ -56,6 +57,15 @@ export async function POST(req: Request) {
         ref_code: existing.refCode,
         referral_link: `${appUrl}/r/${existing.refCode}`,
       });
+    }
+
+    // Enforce referrer limit based on campaign owner's tier
+    const tierCheck = await canAddReferrer(campaign.userId, campaign_id);
+    if (!tierCheck.allowed) {
+      return NextResponse.json(
+        { error: tierCheck.reason ?? "Referrer limit reached for this campaign" },
+        { status: 403 }
+      );
     }
 
     // Generate unique ref_code (retry on collision)

@@ -15,7 +15,7 @@
     "react-dom": "^18.3.0",
     "next-auth": "^5.0.0-beta.19",
     "bcryptjs": "^2.4.3",
-    "stripe": "^14.25.0",
+    "stripe": "^20.4.0",
     "nanoid": "^5.0.7",
     "drizzle-orm": "^0.30.0",
     "@referkit/db": "*",

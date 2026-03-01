@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
 import type Stripe from "stripe";
-import { db, users, subscriptions } from "@referkit/db";
+import { db, subscriptions } from "@referkit/db";
 import { eq } from "@referkit/db";
 import { getStripe } from "@/lib/stripe";
 
@@ -36,73 +36,82 @@ export async function POST(req: Request) {
         if (session.mode !== "subscription") break;
 
         const userId = session.metadata?.userId;
-        if (!userId) break;
+        const plan = session.metadata?.plan as "starter" | "growth" | undefined;
+        if (!userId || !plan) break;
 
         const subscriptionId = session.subscription as string;
+        const customerId = typeof session.customer === "string" ? session.customer : null;
         const sub = await stripe.subscriptions.retrieve(subscriptionId);
 
-        // Upsert subscription
-        const existing = await db
-          .select({ id: subscriptions.id })
-          .from(subscriptions)
-          .where(eq(subscriptions.userId, userId))
-          .limit(1);
+        // In Stripe v20+, current_period_end is on SubscriptionItem
+        const periodEndTs = sub.items.data[0]?.current_period_end ?? 0;
+        const periodEnd = periodEndTs > 0 ? new Date(periodEndTs * 1000) : null;
 
-        if (existing.length > 0) {
-          await db
-            .update(subscriptions)
-            .set({
-              stripeSubscriptionId: subscriptionId,
-              status: sub.status,
-              currentPeriodEnd: new Date(sub.current_period_end * 1000),
-            })
-            .where(eq(subscriptions.userId, userId));
-        } else {
-          await db.insert(subscriptions).values({
-            userId,
-            stripeSubscriptionId: subscriptionId,
-            status: sub.status,
-            currentPeriodEnd: new Date(sub.current_period_end * 1000),
-          });
-        }
-
-        // Upgrade user plan
         await db
-          .update(users)
-          .set({ plan: "pro" })
-          .where(eq(users.id, userId));
+          .insert(subscriptions)
+          .values({
+            userId,
+            tier: plan,
+            status: sub.status,
+            stripeSubscriptionId: subscriptionId,
+            stripeCustomerId: customerId,
+            currentPeriodEnd: periodEnd,
+          })
+          .onConflictDoUpdate({
+            target: subscriptions.userId,
+            set: {
+              tier: plan,
+              status: sub.status,
+              stripeSubscriptionId: subscriptionId,
+              stripeCustomerId: customerId,
+              currentPeriodEnd: periodEnd,
+            },
+          });
 
         break;
       }
 
-      case "customer.subscription.updated":
-      case "customer.subscription.deleted": {
+      case "customer.subscription.updated": {
         const sub = event.data.object as Stripe.Subscription;
         const customerId = sub.customer as string;
 
-        const [user] = await db
-          .select({ id: users.id })
-          .from(users)
-          .where(eq(users.stripeCustomerId, customerId))
-          .limit(1);
-
-        if (!user) break;
+        const periodEndTs = sub.items.data[0]?.current_period_end ?? 0;
+        const periodEnd = periodEndTs > 0 ? new Date(periodEndTs * 1000) : null;
 
         await db
           .update(subscriptions)
           .set({
             status: sub.status,
-            currentPeriodEnd: new Date(sub.current_period_end * 1000),
+            currentPeriodEnd: periodEnd,
           })
-          .where(eq(subscriptions.userId, user.id));
+          .where(eq(subscriptions.stripeCustomerId, customerId));
 
         // Downgrade if cancelled/past_due/unpaid
         if (["canceled", "unpaid", "past_due"].includes(sub.status)) {
           await db
-            .update(users)
-            .set({ plan: "free" })
-            .where(eq(users.id, user.id));
+            .update(subscriptions)
+            .set({ tier: "free" })
+            .where(eq(subscriptions.stripeCustomerId, customerId));
         }
+
+        break;
+      }
+
+      case "customer.subscription.deleted": {
+        const sub = event.data.object as Stripe.Subscription;
+        const customerId = sub.customer as string;
+
+        const periodEndTs = sub.items.data[0]?.current_period_end ?? 0;
+        const periodEnd = periodEndTs > 0 ? new Date(periodEndTs * 1000) : null;
+
+        await db
+          .update(subscriptions)
+          .set({
+            status: "canceled",
+            tier: "free",
+            currentPeriodEnd: periodEnd,
+          })
+          .where(eq(subscriptions.stripeCustomerId, customerId));
 
         break;
       }
@@ -111,18 +120,10 @@ export async function POST(req: Request) {
         const invoice = event.data.object as Stripe.Invoice;
         const customerId = invoice.customer as string;
 
-        const [user] = await db
-          .select({ id: users.id })
-          .from(users)
-          .where(eq(users.stripeCustomerId, customerId))
-          .limit(1);
-
-        if (!user) break;
-
         await db
           .update(subscriptions)
           .set({ status: "past_due" })
-          .where(eq(subscriptions.userId, user.id));
+          .where(eq(subscriptions.stripeCustomerId, customerId));
 
         break;
       }
